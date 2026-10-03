@@ -184,7 +184,12 @@ function calc(){
   chEl.textContent = pct(chance);
   fill.style.width = Math.max(1, Math.min(100, chance * 100)) + '%';
   var n = Math.round(1 / chance);
-  oneIn.textContent = n <= 1 ? 'Lands most of the time.' : 'Lands about 1 time in ' + n + '.';
+  if (chance >= 0.3) {
+    var t = Math.round(chance * 10);
+    oneIn.textContent = t >= 10 ? 'Lands almost every time.' : 'Lands about ' + t + ' times in 10.';
+  } else {
+    oneIn.textContent = 'Lands about 1 time in ' + n + '.';
+  }
 
   vd.style.display = 'inline-block';
   var mood;
