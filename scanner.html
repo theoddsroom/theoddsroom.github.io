@@ -95,7 +95,7 @@ function teamStats(finished, id, venue){
   const n = rows.length || 1;
   return {
     rows,
-    last5: rows.slice(-5),
+    last5: rows.slice(-5).reverse(),
     n: rows.length,
     gf: (rows.reduce((s,r)=>s+r.gf,0)/n).toFixed(2),
     ga: (rows.reduce((s,r)=>s+r.ga,0)/n).toFixed(2),
@@ -123,10 +123,10 @@ function render(lgName, upcoming, finished){
     const hh = teamStats(finished, h.id, "H"), aa = teamStats(finished, a.id, "A");
     const txt =
 `${lgName} | ${fmtDate(m.utcDate)} | ${h.shortName} vs ${a.shortName}
-${h.shortName} forma: ${formTxt(hs.last5) || "ni podatkov"}
+${h.shortName} forma (najnovejša prva): ${formTxt(hs.last5) || "ni podatkov"}
 ${h.shortName} sezona: ${statLine(hs)}
 ${h.shortName} doma: ${statLine(hh)}
-${a.shortName} forma: ${formTxt(as.last5) || "ni podatkov"}
+${a.shortName} forma (najnovejša prva): ${formTxt(as.last5) || "ni podatkov"}
 ${a.shortName} sezona: ${statLine(as)}
 ${a.shortName} v gosteh: ${statLine(aa)}`;
     lastText[i] = txt;
