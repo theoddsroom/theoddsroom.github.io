@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="sl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Odds Room Scanner</title>
+<style>
+  :root{--bg:#0f1115;--card:#181b22;--line:#2a2f3a;--txt:#e8eaed;--mut:#9aa0aa;--acc:#3b82f6;--w:#22c55e;--d:#a3a3a3;--l:#ef4444}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:15px/1.4 system-ui,-apple-system,sans-serif;padding:16px}
+  h1{font-size:20px;margin:0 0 12px}
+  .ctl{display:grid;gap:8px;margin-bottom:12px}
+  .row{display:flex;gap:8px}
+  .row>*{flex:1;min-width:0}
+  select,input,button{font:inherit;padding:10px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--txt);width:100%}
+  button{background:var(--acc);border:0;font-weight:600}
+  button.sec{background:var(--card);border:1px solid var(--line);font-weight:500}
+  .msg{color:var(--mut);font-size:13px;margin:8px 0}
+  .err{color:var(--l)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:12px}
+  .hd{font-weight:600;margin-bottom:2px}
+  .sub{color:var(--mut);font-size:13px;margin-bottom:8px}
+  .team{margin-top:8px;padding-top:8px;border-top:1px solid var(--line)}
+  .tn{font-weight:600}
+  .form{display:flex;gap:4px;margin:4px 0}
+  .f{width:22px;height:22px;border-radius:4px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:#000}
+  .W{background:var(--w)}.D{background:var(--d)}.L{background:var(--l)}
+  .st{font-size:13px;color:var(--mut)}
+  .st b{color:var(--txt);font-weight:600}
+  .h2h{font-size:13px;margin-top:8px;color:var(--mut)}
+  .btns{display:flex;gap:8px;margin-top:10px}
+  pre{white-space:pre-wrap;font-size:12px;background:#0b0d11;border:1px solid var(--line);border-radius:8px;padding:10px;margin:0}
+</style>
+</head>
+<body>
+<h1>Odds Room Scanner</h1>
+
+<div class="ctl">
+  <select id="lg">
+    <option value="PL">Premier League</option>
+    <option value="ELC">Championship</option>
+    <option value="PD">La Liga</option>
+    <option value="SA">Serie A</option>
+    <option value="BL1">Bundesliga</option>
+    <option value="FL1">Ligue 1</option>
+    <option value="DED">Eredivisie</option>
+    <option value="PPL">Primeira Liga</option>
+    <option value="BSA">Brasileirão</option>
+    <option value="CL">Champions League</option>
+  </select>
+  <div class="row">
+    <input type="date" id="d1">
+    <input type="date" id="d2">
+  </div>
+  <button id="go">Skeniraj</button>
+  <button id="cpAll" class="sec" style="display:none">Kopiraj vse za Claude</button>
+</div>
+
+<div id="msg" class="msg"></div>
+<div id="out"></div>
+
+<script>
+const WORKER = "https://odds-room.oddsroomhq.workers.dev";
+const $ = (id) => document.getElementById(id);
+let calls = 0, cache = {}, lastText = [];
+
+function iso(d){ return d.toISOString().slice(0,10); }
+const today = new Date(), plus = new Date(Date.now() + 7*864e5);
+$("d1").value = iso(today); $("d2").value = iso(plus);
+
+async function api(path){
+  calls++;
+  const r = await fetch(WORKER + path);
+  if (r.status === 429) throw new Error("Preveč klicev. Počakaj 1 minuto.");
+  if (!r.ok) throw new Error("Napaka " + r.status + ": " + (await r.text()).slice(0,150));
+  return r.json();
+}
+
+function fmtDate(u){
+  return new Date(u).toLocaleString("sl-SI",{timeZone:"Europe/Ljubljana",day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});
+}
+
+function teamStats(finished, id, venue){
+  let ms = finished.filter(m => m.homeTeam.id === id || m.awayTeam.id === id);
+  if (venue === "H") ms = ms.filter(m => m.homeTeam.id === id);
+  if (venue === "A") ms = ms.filter(m => m.awayTeam.id === id);
+  const rows = ms.map(m => {
+    const home = m.homeTeam.id === id;
+    const gf = home ? m.score.fullTime.home : m.score.fullTime.away;
+    const ga = home ? m.score.fullTime.away : m.score.fullTime.home;
+    const opp = home ? m.awayTeam.shortName : m.homeTeam.shortName;
+    return { date:m.utcDate.slice(0,10), gf, ga, opp, ha: home ? "D" : "G",
+             res: gf>ga ? "W" : gf<ga ? "L" : "D", tot: gf+ga, btts: gf>0 && ga>0 };
+  });
+  const n = rows.length || 1;
+  return {
+    rows,
+    last5: rows.slice(-5),
+    n: rows.length,
+    gf: (rows.reduce((s,r)=>s+r.gf,0)/n).toFixed(2),
+    ga: (rows.reduce((s,r)=>s+r.ga,0)/n).toFixed(2),
+    o25: Math.round(rows.filter(r=>r.tot>2).length/n*100),
+    btts: Math.round(rows.filter(r=>r.btts).length/n*100),
+  };
+}
+
+function formHtml(last5){
+  return '<div class="form">' + last5.map(r => `<span class="f ${r.res}">${r.res}</span>`).join("") + "</div>";
+}
+function formTxt(last5){
+  return last5.map(r => `${r.res} ${r.gf}:${r.ga} ${r.opp} (${r.ha})`).join(", ");
+}
+function statLine(s){
+  return `${s.n} tekem | goli ${s.gf}/${s.ga} | O2.5 ${s.o25}% | BTTS ${s.btts}%`;
+}
+
+function render(lgName, upcoming, finished){
+  $("out").innerHTML = ""; lastText = [];
+  if (!upcoming.length){ $("out").innerHTML = '<div class="msg">V tem obdobju ni tekem.</div>'; return; }
+  upcoming.forEach((m, i) => {
+    const h = m.homeTeam, a = m.awayTeam;
+    const hs = teamStats(finished, h.id), as = teamStats(finished, a.id);
+    const hh = teamStats(finished, h.id, "H"), aa = teamStats(finished, a.id, "A");
+    const txt =
+`${lgName} | ${fmtDate(m.utcDate)} | ${h.shortName} vs ${a.shortName}
+${h.shortName} forma: ${formTxt(hs.last5) || "ni podatkov"}
+${h.shortName} sezona: ${statLine(hs)}
+${h.shortName} doma: ${statLine(hh)}
+${a.shortName} forma: ${formTxt(as.last5) || "ni podatkov"}
+${a.shortName} sezona: ${statLine(as)}
+${a.shortName} v gosteh: ${statLine(aa)}`;
+    lastText[i] = txt;
+
+    const c = document.createElement("div"); c.className = "card";
+    c.innerHTML = `
+      <div class="hd">${h.shortName} vs ${a.shortName}</div>
+      <div class="sub">${fmtDate(m.utcDate)} · krog ${m.matchday ?? "-"}</div>
+      <div class="team"><div class="tn">${h.shortName}</div>${formHtml(hs.last5)}
+        <div class="st">Sezona: <b>${statLine(hs)}</b></div>
+        <div class="st">Doma: <b>${statLine(hh)}</b></div></div>
+      <div class="team"><div class="tn">${a.shortName}</div>${formHtml(as.last5)}
+        <div class="st">Sezona: <b>${statLine(as)}</b></div>
+        <div class="st">V gosteh: <b>${statLine(aa)}</b></div></div>
+      <div class="h2h" id="h2h${i}"></div>
+      <div class="btns">
+        <button class="sec" id="hb${i}">H2H</button>
+        <button class="sec" id="cb${i}">Kopiraj</button>
+      </div>`;
+    $("out").appendChild(c);
+    $("cb"+i).onclick = () => copy(lastText[i], $("cb"+i));
+    $("hb"+i).onclick = () => loadH2H(m.id, i);
+  });
+}
+
+async function loadH2H(id, i){
+  const box = $("h2h"+i);
+  box.textContent = "Nalagam H2H...";
+  try{
+    const d = await api(`/matches/${id}/head2head?limit=5`);
+    const ms = (d.matches || []).filter(m => m.status === "FINISHED");
+    if (!ms.length){ box.textContent = "H2H: ni podatkov."; return; }
+    const lines = ms.map(m => `${m.utcDate.slice(0,10)} ${m.homeTeam.shortName} ${m.score.fullTime.home}:${m.score.fullTime.away} ${m.awayTeam.shortName}`);
+    box.innerHTML = "<b>H2H:</b><br>" + lines.join("<br>");
+    lastText[i] = lastText[i].replace(/\nH2H:[\s\S]*$/, "") + "\nH2H: " + lines.join("; ");
+    $("msg").textContent = `Klici danes v tej seji: ${calls}`;
+  }catch(e){ box.innerHTML = `<span class="err">${e.message}</span>`; }
+}
+
+function copy(t, btn){
+  const done = () => { const o = btn.textContent; btn.textContent = "Kopirano ✓"; setTimeout(()=>btn.textContent=o, 1500); };
+  if (navigator.clipboard) navigator.clipboard.writeText(t).then(done, () => fallback(t, done));
+  else fallback(t, done);
+}
+function fallback(t, done){
+  const ta = document.createElement("textarea"); ta.value = t; document.body.appendChild(ta);
+  ta.select(); document.execCommand("copy"); ta.remove(); done();
+}
+
+$("go").onclick = async () => {
+  const lg = $("lg").value, lgName = $("lg").selectedOptions[0].text;
+  const d1 = $("d1").value, d2 = $("d2").value;
+  $("msg").className = "msg"; $("msg").textContent = "Nalagam...";
+  $("out").innerHTML = ""; $("cpAll").style.display = "none";
+  try{
+    if (!cache[lg]) cache[lg] = await api(`/competitions/${lg}/matches`);
+    const all = cache[lg].matches || [];
+    const finished = all.filter(m => m.status === "FINISHED").sort((a,b)=>a.utcDate.localeCompare(b.utcDate));
+    const end = new Date(d2); end.setDate(end.getDate()+1);
+    const upcoming = all.filter(m => !["FINISHED","CANCELLED","AWARDED"].includes(m.status)
+      && new Date(m.utcDate) >= new Date(d1) && new Date(m.utcDate) < end)
+      .sort((a,b)=>a.utcDate.localeCompare(b.utcDate));
+    render(lgName, upcoming, finished);
+    $("msg").textContent = `${upcoming.length} tekem · Klici v tej seji: ${calls}`;
+    if (upcoming.length) $("cpAll").style.display = "block";
+  }catch(e){ $("msg").className = "msg err"; $("msg").textContent = e.message; }
+};
+
+$("cpAll").onclick = () => copy(lastText.join("\n\n"), $("cpAll"));
+</script>
+</body>
+</html>
