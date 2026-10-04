@@ -29,6 +29,10 @@
   .st b{color:var(--txt);font-weight:600}
   .h2h{font-size:13px;margin-top:8px;color:var(--mut)}
   .btns{display:flex;gap:8px;margin-top:10px}
+  .chk{display:flex;gap:8px;align-items:center;font-size:14px;color:var(--mut)}
+  .chk input{width:auto}
+  .odds{margin-top:8px;padding-top:8px;border-top:1px solid var(--line);font-size:13px;color:var(--mut)}
+  .odds b{color:var(--txt);font-weight:600}
   pre{white-space:pre-wrap;font-size:12px;background:#0b0d11;border:1px solid var(--line);border-radius:8px;padding:10px;margin:0}
 </style>
 </head>
@@ -52,6 +56,7 @@
     <input type="date" id="d1">
     <input type="date" id="d2">
   </div>
+  <label class="chk"><input type="checkbox" id="wo" checked> Kvote (2 kredita na ligo)</label>
   <button id="go">Skeniraj</button>
   <button id="cpAll" class="sec" style="display:none">Kopiraj vse za Claude</button>
 </div>
@@ -62,7 +67,8 @@
 <script>
 const WORKER = "https://odds-room.oddsroomhq.workers.dev";
 const $ = (id) => document.getElementById(id);
-let calls = 0, cache = {}, lastText = [];
+let calls = 0, cache = {}, lastText = [], oddsCache = {}, credits = null;
+const SPORT = {PL:"soccer_epl",ELC:"soccer_efl_champ",PD:"soccer_spain_la_liga",SA:"soccer_italy_serie_a",BL1:"soccer_germany_bundesliga",FL1:"soccer_france_ligue_one",DED:"soccer_netherlands_eredivisie",PPL:"soccer_portugal_primeira_liga",BSA:"soccer_brazil_campeonato",CL:"soccer_uefa_champs_league"};
 
 function iso(d){ return d.toISOString().slice(0,10); }
 const today = new Date(), plus = new Date(Date.now() + 7*864e5);
@@ -78,6 +84,77 @@ async function api(path){
 
 function fmtDate(u){
   return new Date(u).toLocaleString("sl-SI",{timeZone:"Europe/Ljubljana",day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});
+}
+
+async function loadOdds(lg){
+  const r = await fetch(`${WORKER}/odds/sports/${SPORT[lg]}/odds?regions=eu&markets=h2h,totals&oddsFormat=decimal`);
+  credits = r.headers.get("x-requests-remaining") || credits;
+  if (!r.ok) throw new Error("Kvote: napaka " + r.status + ": " + (await r.text()).slice(0,150));
+  return r.json();
+}
+
+const STOP = new Set(["fc","afc","cf","and","the","club","ac","sc"]);
+function toks(s){
+  return s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/[^a-z0-9 ]/g," ")
+    .split(" ").filter(t => t.length >= 3 && !STOP.has(t));
+}
+function nameScore(a, b){
+  const A = toks(a), B = toks(b); let s = 0;
+  for (const x of A) if (B.some(y => y.startsWith(x) || x.startsWith(y))) s++;
+  return s;
+}
+function findEvent(m, events){
+  const t = new Date(m.utcDate).getTime();
+  let best = null, bs = 0;
+  for (const e of events || []){
+    if (Math.abs(new Date(e.commence_time).getTime() - t) > 3*3600e3) continue;
+    const s = nameScore(m.homeTeam.name + " " + m.homeTeam.shortName, e.home_team)
+            + nameScore(m.awayTeam.name + " " + m.awayTeam.shortName, e.away_team);
+    if (s > bs){ bs = s; best = e; }
+  }
+  return bs >= 2 ? best : null;
+}
+
+function price(b, mk, name, point){
+  return b.markets.find(x => x.key === mk)?.outcomes
+    .find(o => o.name === name && (point === undefined || o.point === point))?.price;
+}
+function fair(arr){ const inv = arr.map(x => 1/x), s = inv.reduce((a,b)=>a+b,0); return inv.map(x => x/s); }
+function fairFrom(books, get){
+  const pin = books.find(b => b.key === "pinnacle");
+  const pp = pin && get(pin);
+  if (pp && pp.every(Boolean)) return { p: fair(pp), src: "Pinnacle" };
+  const sets = books.map(get).filter(x => x.every(Boolean)).map(fair);
+  if (!sets.length) return null;
+  return { p: sets[0].map((_, i) => sets.reduce((a, s) => a + s[i], 0) / sets.length), src: `povprečje ${sets.length} stavnic` };
+}
+function bestOf(books, get){
+  let best = null;
+  for (const b of books){ const x = get(b); if (x && (!best || x > best.v)) best = { v: x, bk: b.title }; }
+  return best;
+}
+function oddsInfo(e){
+  if (!e) return null;
+  const B = e.bookmakers, n = [e.home_team, "Draw", e.away_team];
+  const f1 = fairFrom(B, b => n.map(x => price(b, "h2h", x)));
+  const b1 = n.map(x => bestOf(B, b => price(b, "h2h", x)));
+  const ou = ["Over", "Under"];
+  const f2 = fairFrom(B, b => ou.map(x => price(b, "totals", x, 2.5)));
+  const b2 = ou.map(x => bestOf(B, b => price(b, "totals", x, 2.5)));
+  return { f1, b1, f2, b2 };
+}
+const pc = (p) => Math.round(p*100) + "%";
+const fo = (p) => (1/p).toFixed(2);
+const bt = (x) => x ? `${x.v.toFixed(2)} ${x.bk}` : "-";
+function oddsLines(o){
+  if (!o) return ["Kvote: tekma ni najdena pri stavnicah"];
+  const L = [];
+  if (o.f1) L.push(`1X2 pošteno (${o.f1.src}): 1 ${pc(o.f1.p[0])} (${fo(o.f1.p[0])}) | X ${pc(o.f1.p[1])} (${fo(o.f1.p[1])}) | 2 ${pc(o.f1.p[2])} (${fo(o.f1.p[2])})`);
+  L.push(`1X2 najboljše: 1 ${bt(o.b1[0])} | X ${bt(o.b1[1])} | 2 ${bt(o.b1[2])}`);
+  if (o.f2) L.push(`O/U 2.5 pošteno (${o.f2.src}): Over ${pc(o.f2.p[0])} (${fo(o.f2.p[0])}) | Under ${pc(o.f2.p[1])} (${fo(o.f2.p[1])})`);
+  else L.push("O/U 2.5: ni linije 2.5");
+  if (o.f2) L.push(`O/U 2.5 najboljše: Over ${bt(o.b2[0])} | Under ${bt(o.b2[1])}`);
+  return L;
 }
 
 function teamStats(finished, id, venue){
@@ -114,13 +191,14 @@ function statLine(s){
   return `${s.n} tekem | goli ${s.gf}/${s.ga} | O2.5 ${s.o25}% | BTTS ${s.btts}%`;
 }
 
-function render(lgName, upcoming, finished){
+function render(lgName, upcoming, finished, events){
   $("out").innerHTML = ""; lastText = [];
   if (!upcoming.length){ $("out").innerHTML = '<div class="msg">V tem obdobju ni tekem.</div>'; return; }
   upcoming.forEach((m, i) => {
     const h = m.homeTeam, a = m.awayTeam;
     const hs = teamStats(finished, h.id), as = teamStats(finished, a.id);
     const hh = teamStats(finished, h.id, "H"), aa = teamStats(finished, a.id, "A");
+    const ol = events ? oddsLines(oddsInfo(findEvent(m, events))) : [];
     const txt =
 `${lgName} | ${fmtDate(m.utcDate)} | ${h.shortName} vs ${a.shortName}
 ${h.shortName} forma (najnovejša prva): ${formTxt(hs.last5) || "ni podatkov"}
@@ -128,7 +206,7 @@ ${h.shortName} sezona: ${statLine(hs)}
 ${h.shortName} doma: ${statLine(hh)}
 ${a.shortName} forma (najnovejša prva): ${formTxt(as.last5) || "ni podatkov"}
 ${a.shortName} sezona: ${statLine(as)}
-${a.shortName} v gosteh: ${statLine(aa)}`;
+${a.shortName} v gosteh: ${statLine(aa)}` + (ol.length ? "\n" + ol.join("\n") : "");
     lastText[i] = txt;
 
     const c = document.createElement("div"); c.className = "card";
@@ -141,6 +219,7 @@ ${a.shortName} v gosteh: ${statLine(aa)}`;
       <div class="team"><div class="tn">${a.shortName}</div>${formHtml(as.last5)}
         <div class="st">Sezona: <b>${statLine(as)}</b></div>
         <div class="st">V gosteh: <b>${statLine(aa)}</b></div></div>
+      ${ol.length ? `<div class="odds">${ol.map(l => l.replace(/^([^:]+):/, "<b>$1:</b>")).join("<br>")}</div>` : ""}
       <div class="h2h" id="h2h${i}"></div>
       <div class="btns">
         <button class="sec" id="hb${i}">H2H</button>
@@ -189,8 +268,13 @@ $("go").onclick = async () => {
     const upcoming = all.filter(m => !["FINISHED","CANCELLED","AWARDED"].includes(m.status)
       && new Date(m.utcDate) >= new Date(d1) && new Date(m.utcDate) < end)
       .sort((a,b)=>a.utcDate.localeCompare(b.utcDate));
-    render(lgName, upcoming, finished);
-    $("msg").textContent = `${upcoming.length} tekem · Klici v tej seji: ${calls}`;
+    let events = null, oddsErr = "";
+    if ($("wo").checked && upcoming.length){
+      try{ if (!oddsCache[lg]) oddsCache[lg] = await loadOdds(lg); events = oddsCache[lg]; }
+      catch(e){ oddsErr = " · " + e.message; }
+    }
+    render(lgName, upcoming, finished, events);
+    $("msg").textContent = `${upcoming.length} tekem · Klici: ${calls}` + (credits ? ` · Krediti za kvote: ${credits}` : "") + oddsErr;
     if (upcoming.length) $("cpAll").style.display = "block";
   }catch(e){ $("msg").className = "msg err"; $("msg").textContent = e.message; }
 };
