@@ -283,17 +283,20 @@ async function hl(path){
   if (!r.ok) throw new Error("Highlightly napaka " + r.status + ": " + (await r.text()).slice(0,150));
   return r.json();
 }
-async function hlDay(d){
-  if (hlDays[d]) return hlDays[d];
+const HL_NAME = {PL:"Premier League",ELC:"Championship",PD:"La Liga",SA:"Serie A",BL1:"Bundesliga",FL1:"Ligue 1",DED:"Eredivisie",PPL:"Primeira Liga",BSA:"Serie A",CL:"UEFA Champions League"};
+async function hlDay(d, lg){
+  const key = d + (lg ? "|" + lg : "");
+  if (hlDays[key]) return hlDays[key];
+  const flt = lg && HL_NAME[lg] ? "&leagueName=" + encodeURIComponent(HL_NAME[lg]) : "";
   const all = [];
-  for (let off = 0, page = 0; page < 8; page++, off += 100){
-    const j = await hl(`/football/matches?date=${d}&limit=100&offset=${off}`);
+  for (let off = 0, page = 0; page < (flt ? 3 : 8); page++, off += 100){
+    const j = await hl(`/football/matches?date=${d}${flt}&limit=100&offset=${off}`);
     const data = (j && j.data) || [];
     all.push(...data);
     const tot = j && j.pagination && j.pagination.totalCount;
     if (data.length < 100 || (tot && all.length >= tot)) break;
   }
-  return (hlDays[d] = all);
+  return (hlDays[key] = all);
 }
 function findHl(m, list){
   const t = new Date(m.utcDate).getTime();
@@ -318,7 +321,9 @@ async function loadLineups(m, i){
   try{
     const d = m.utcDate.slice(0,10);
     if (!hlLineups[m.id]){
-      const e = findHl(m, await hlDay(d));
+      const lg = m.competition?.code || m._lg;
+      let e = findHl(m, await hlDay(d, lg));
+      if (!e && lg) e = findHl(m, await hlDay(d));
       if (!e){ box.textContent = "Postave: tekme ni v Highlightly."; return; }
       const j = await hl(`/football/lineups/${e.id}`);
       hlLineups[m.id] = j && (j.homeTeam ? j : j.data) || {};
@@ -368,6 +373,7 @@ $("go").onclick = async () => {
       const upcoming = all.filter(m => !["FINISHED","CANCELLED","AWARDED","IN_PLAY","PAUSED"].includes(m.status)
         && inRange(m.utcDate, d1, d2)).sort((a,b)=>a.utcDate.localeCompare(b.utcDate));
       if (!upcoming.length) continue;
+      upcoming.forEach(m => m._lg = lg);
       let events = null;
       if ($("wo").checked){
         try{ if (!oddsCache[lg]){ oddsCache[lg] = await loadOdds(lg); used.push(lgName); } events = oddsCache[lg]; }
