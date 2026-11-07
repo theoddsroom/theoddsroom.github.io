@@ -1,3 +1,8 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Correct Score Simulator</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800;900&family=JetBrains+Mono:wght@500;700&display=swap">
@@ -115,6 +120,9 @@ table.hm td.best{outline:2px solid var(--amber);outline-offset:-2px}
 .src{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
 @media (max-width:560px){.mk{grid-template-columns:repeat(3,1fr)}.sc{grid-template-columns:44px 1fr 52px 56px}table.hm td{width:38px;height:30px}}
 </style>
+</head>
+<body>
+
 
 <div class="wrap">
   <div class="bar">
@@ -285,7 +293,7 @@ function heat(list){
   let h='<div class="axis">Away goals →</div><table class="hm"><tr><th></th>'+[0,1,2,3,4,5].map(j=>`<th>${j}</th>`).join("")+'</tr>';
   for(let i=0;i<=5;i++){h+=`<tr><th>${i}</th>`;for(let j=0;j<=5;j++){const s=i+":"+j,p=mp.get(s)||0,a=Math.min(1,p/mx);
     h+=`<td class="${s===best?"best":""}" style="background:rgba(0,230,118,${(0.06+a*0.74).toFixed(2)});${a>0.55?"color:#04140E;font-weight:700":""}" title="${s}">${p>=0.0005?(p*100).toFixed(p<0.1?1:0):""}</td>`}h+="</tr>"}
-  return h+'</table><div class="axis">↑ Home goals · cells show %</div>'}
+  return h+'</table><div class="axis">Rows = home goals · cells show %</div>'}
 function renderMatches(){
   const box=document.getElementById("matches");box.innerHTML="";
   if(!S.matches.length){box.innerHTML=`<div class="m"><b>No matches yet.</b><span class="meta">Tap "+ Add match" or load the example to see how it works.</span></div>`}
@@ -337,3 +345,6 @@ document.getElementById("copy").onclick=()=>{
 };
 runSim();
 </script>
+
+</body>
+</html>
