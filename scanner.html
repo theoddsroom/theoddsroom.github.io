@@ -245,13 +245,16 @@ ${a.shortName} v gosteh: ${statLine(aa)}` + (ol.length ? "\n" + ol.join("\n") : 
         <div class="st">V gosteh: <b>${statLine(aa)}</b></div></div>
       ${ol.length ? `<div class="odds">${ol.map(l => l.replace(/^([^:]+):/, "<b>$1:</b>")).join("<br>")}</div>` : ""}
       <div class="h2h" id="h2h${i}"></div>
+      <div class="h2h" id="lu${i}"></div>
       <div class="btns">
         <button class="sec" id="hb${i}">H2H</button>
+        <button class="sec" id="lb${i}">Postave</button>
         <button class="sec" id="cb${i}">Kopiraj</button>
       </div>`;
     $("out").appendChild(c);
     $("cb"+i).onclick = () => copy(lastText[i], $("cb"+i));
     $("hb"+i).onclick = () => loadH2H(m.id, i);
+    $("lb"+i).onclick = () => loadLineups(m, i);
   });
 }
 
@@ -264,8 +267,73 @@ async function loadH2H(id, i){
     if (!ms.length){ box.textContent = "H2H: ni podatkov."; return; }
     const lines = ms.map(m => `${m.utcDate.slice(0,10)} ${m.homeTeam.shortName} ${m.score.fullTime.home}:${m.score.fullTime.away} ${m.awayTeam.shortName}`);
     box.innerHTML = "<b>H2H:</b><br>" + lines.join("<br>");
-    lastText[i] = lastText[i].replace(/\nH2H:[\s\S]*$/, "") + "\nH2H: " + lines.join("; ");
+    lastText[i] = lastText[i].replace(/\nH2H:[^\n]*/, "") + "\nH2H: " + lines.join("; ");
     $("msg").textContent = `Klici danes v tej seji: ${calls}`;
+  }catch(e){ box.innerHTML = `<span class="err">${e.message}</span>`; }
+}
+
+// ---- Postave (Highlightly, brezplačno 100 klicev na dan) ----
+let hlCalls = 0;
+const hlDays = {}, hlLineups = {};
+async function hl(path){
+  hlCalls++;
+  const r = await fetch(WORKER + "/hl" + path);
+  if (r.status === 404) return null;
+  if (r.status === 429) throw new Error("Highlightly: dnevna omejitev porabljena (100 klicev).");
+  if (!r.ok) throw new Error("Highlightly napaka " + r.status + ": " + (await r.text()).slice(0,150));
+  return r.json();
+}
+async function hlDay(d){
+  if (hlDays[d]) return hlDays[d];
+  const all = [];
+  for (let off = 0, page = 0; page < 8; page++, off += 100){
+    const j = await hl(`/football/matches?date=${d}&limit=100&offset=${off}`);
+    const data = (j && j.data) || [];
+    all.push(...data);
+    const tot = j && j.pagination && j.pagination.totalCount;
+    if (data.length < 100 || (tot && all.length >= tot)) break;
+  }
+  return (hlDays[d] = all);
+}
+function findHl(m, list){
+  const t = new Date(m.utcDate).getTime();
+  let best = null, bs = 0;
+  for (const e of list){
+    if (Math.abs(new Date(e.date).getTime() - t) > 3*3600e3) continue;
+    const s = nameScore(m.homeTeam.name + " " + m.homeTeam.shortName, e.homeTeam?.name || "")
+            + nameScore(m.awayTeam.name + " " + m.awayTeam.shortName, e.awayTeam?.name || "");
+    if (s > bs){ bs = s; best = e; }
+  }
+  return bs >= 2 ? best : null;
+}
+function luTeam(t){
+  if (!t || !t.initialLineup || !t.initialLineup.length) return null;
+  const xi = t.initialLineup.map(row => (Array.isArray(row) ? row : [row]).map(p => p.name).join(", ")).join(" | ");
+  const subs = (t.substitutes || []).map(p => p.name).join(", ");
+  return { f: t.formation || "?", xi, subs };
+}
+async function loadLineups(m, i){
+  const box = $("lu"+i);
+  box.textContent = "Nalagam postave...";
+  try{
+    const d = m.utcDate.slice(0,10);
+    if (!hlLineups[m.id]){
+      const e = findHl(m, await hlDay(d));
+      if (!e){ box.textContent = "Postave: tekme ni v Highlightly."; return; }
+      const j = await hl(`/football/lineups/${e.id}`);
+      hlLineups[m.id] = j && (j.homeTeam ? j : j.data) || {};
+    }
+    const L = hlLineups[m.id], h = luTeam(L.homeTeam), a = luTeam(L.awayTeam);
+    if (!h && !a){
+      delete hlLineups[m.id];
+      box.textContent = "Postave še niso objavljene. Pridejo približno 30–60 min pred tekmo.";
+    } else {
+      const ln = (nm, x) => x ? `${nm} (${x.f}): ${x.xi}` + (x.subs ? ` · Klop: ${x.subs}` : "") : `${nm}: ni podatka`;
+      const t1 = ln(m.homeTeam.shortName, h), t2 = ln(m.awayTeam.shortName, a);
+      box.innerHTML = "<b>Postave:</b><br>" + [t1, t2].map(s => s.replace(/</g,"&lt;")).join("<br>");
+      lastText[i] = lastText[i].replace(/\nPostave:[^\n]*/, "") + "\nPostave: " + t1 + " || " + t2;
+    }
+    $("msg").textContent = `Highlightly klici v tej seji: ${hlCalls} (dnevno 100)`;
   }catch(e){ box.innerHTML = `<span class="err">${e.message}</span>`; }
 }
 
