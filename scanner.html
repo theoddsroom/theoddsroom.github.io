@@ -50,6 +50,12 @@
     <button class="sec" id="allOn">Vse lige</button>
     <button class="sec" id="allOff">Nobena</button>
   </div>
+  <div class="tn">Dodatne lige (Highlightly, 100 klicev na dan)</div>
+  <div class="lgs" id="lgs2"></div>
+  <div class="row">
+    <button class="sec" id="xOn">Vse dodatne</button>
+    <button class="sec" id="xOff">Brez dodatnih</button>
+  </div>
   <div class="row">
     <button class="sec" id="qToday">Danes</button>
     <button class="sec" id="qTom">Jutri</button>
@@ -76,13 +82,30 @@
 const WORKER = "https://odds-room.oddsroomhq.workers.dev";
 const $ = (id) => document.getElementById(id);
 let calls = 0, cache = {}, lastText = [], oddsCache = {}, credits = null;
-const SPORT = {PL:"soccer_epl",ELC:"soccer_efl_champ",PD:"soccer_spain_la_liga",SA:"soccer_italy_serie_a",BL1:"soccer_germany_bundesliga",FL1:"soccer_france_ligue_one",DED:"soccer_netherlands_eredivisie",PPL:"soccer_portugal_primeira_liga",BSA:"soccer_brazil_campeonato",CL:"soccer_uefa_champs_league"};
+const SPORT = {PL:"soccer_epl",ELC:"soccer_efl_champ",PD:"soccer_spain_la_liga",SA:"soccer_italy_serie_a",BL1:"soccer_germany_bundesliga",FL1:"soccer_france_ligue_one",DED:"soccer_netherlands_eredivisie",PPL:"soccer_portugal_primeira_liga",BSA:"soccer_brazil_campeonato",CL:"soccer_uefa_champs_league",
+  EL:"soccer_uefa_europa_league",ECL:"soccer_uefa_europa_conference_league",TR:"soccer_turkey_super_league",BE:"soccer_belgium_first_div",SCO:"soccer_spl",SB:"soccer_italy_serie_b",BL2:"soccer_germany_bundesliga2",PD2:"soccer_spain_segunda_division",L1:"soccer_england_league1"};
 
 const LEAGUES = [["PL","Premier League"],["ELC","Championship"],["PD","La Liga"],["SA","Serie A"],["BL1","Bundesliga"],["FL1","Ligue 1"],["DED","Eredivisie"],["PPL","Primeira Liga"],["BSA","Brasileirão"],["CL","Champions League"]];
+// Dodatne lige: podatki iz Highlightly. q = poizvedbe za iskanje lige, re = ime lige, c = država
+const XL = [
+  ["EL","Europa League",{q:["leagueName=UEFA Europa League","leagueName=Europa League"],re:/europa league/i,no:/conference/i}],
+  ["ECL","Conference League",{q:["leagueName=UEFA Europa Conference League","leagueName=UEFA Conference League","leagueName=Conference League"],re:/conference league/i}],
+  ["TR","Süper Lig",{q:["countryName=Turkey","countryName=Türkiye","leagueName=Super Lig","leagueName=Süper Lig"],re:/^(trendyol )?s[uü]per lig$/i,c:/turk/i}],
+  ["BE","Belgija Pro League",{q:["countryName=Belgium","leagueName=Pro League","leagueName=Jupiler Pro League"],re:/pro league|first division a|jupiler/i,c:/belg/i}],
+  ["SCO","Škotska Premiership",{q:["countryName=Scotland","leagueName=Premiership"],re:/^(scottish )?premiership$/i,c:/scot/i}],
+  ["SB","Serie B",{q:["countryName=Italy","leagueName=Serie B"],re:/^serie b$/i,c:/ital/i}],
+  ["BL2","2. Bundesliga",{q:["countryName=Germany","leagueName=2. Bundesliga"],re:/^2\.? ?bundesliga$/i,c:/german/i}],
+  ["PD2","La Liga 2",{q:["countryName=Spain","leagueName=Segunda Division","leagueName=La Liga 2"],re:/segunda|laliga ?2|la liga 2|hypermotion/i,c:/spain/i}],
+  ["L1","League One",{q:["countryName=England","leagueName=League One"],re:/^(efl )?league one$/i,c:/england/i}]
+];
+const isX = (k) => XL.some(l => l[0] === k);
 $("lgs").innerHTML = LEAGUES.map(([k,n]) => `<label><input type="checkbox" value="${k}" checked> ${n}</label>`).join("");
-const sel = () => [...document.querySelectorAll("#lgs input:checked")].map(x => LEAGUES.find(l => l[0] === x.value));
+$("lgs2").innerHTML = XL.map(([k,n]) => `<label><input type="checkbox" value="${k}"> ${n}</label>`).join("");
+const sel = () => [...document.querySelectorAll("#lgs input:checked, #lgs2 input:checked")].map(x => LEAGUES.find(l => l[0] === x.value) || XL.find(l => l[0] === x.value));
 $("allOn").onclick = () => document.querySelectorAll("#lgs input").forEach(x => x.checked = true);
-$("allOff").onclick = () => document.querySelectorAll("#lgs input").forEach(x => x.checked = false);
+$("allOff").onclick = () => document.querySelectorAll("#lgs input, #lgs2 input").forEach(x => x.checked = false);
+$("xOn").onclick = () => document.querySelectorAll("#lgs2 input").forEach(x => x.checked = true);
+$("xOff").onclick = () => document.querySelectorAll("#lgs2 input").forEach(x => x.checked = false);
 
 function iso(d){ return d.toLocaleDateString("sv-SE",{timeZone:"Europe/Ljubljana"}); }
 const day = (n) => iso(new Date(Date.now() + n*864e5));
@@ -253,9 +276,24 @@ ${a.shortName} v gosteh: ${statLine(aa)}` + (ol.length ? "\n" + ol.join("\n") : 
       </div>`;
     $("out").appendChild(c);
     $("cb"+i).onclick = () => copy(lastText[i], $("cb"+i));
-    $("hb"+i).onclick = () => loadH2H(m.id, i);
+    $("hb"+i).onclick = () => m._hlId ? loadH2Hx(m, i) : loadH2H(m.id, i);
     $("lb"+i).onclick = () => loadLineups(m, i);
   });
+}
+
+async function loadH2Hx(m, i){
+  const box = $("h2h"+i);
+  box.textContent = "Nalagam H2H...";
+  try{
+    const j = await hl(`/football/head-2-head?teamIdOne=${m.homeTeam.id}&teamIdTwo=${m.awayTeam.id}`);
+    const ms = hlArr(j).map(e => hlMap(e)).filter(x => x.status === "FINISHED")
+      .sort((a,b) => b.utcDate.localeCompare(a.utcDate)).slice(0, 5);
+    if (!ms.length){ box.textContent = "H2H: ni podatkov."; return; }
+    const lines = ms.map(x => `${x.utcDate.slice(0,10)} ${x.homeTeam.shortName} ${x.score.fullTime.home}:${x.score.fullTime.away} ${x.awayTeam.shortName}`);
+    box.innerHTML = "<b>H2H:</b><br>" + lines.join("<br>");
+    lastText[i] = lastText[i].replace(/\nH2H:[^\n]*/, "") + "\nH2H: " + lines.join("; ");
+    $("msg").textContent = `Highlightly klici v tej seji: ${hlCalls} (dnevno 100)`;
+  }catch(e){ box.innerHTML = `<span class="err">H2H: ${e.message}</span>`; }
 }
 
 async function loadH2H(id, i){
@@ -320,6 +358,10 @@ async function loadLineups(m, i){
   box.textContent = "Nalagam postave...";
   try{
     const d = m.utcDate.slice(0,10);
+    if (!hlLineups[m.id] && m._hlId){
+      const j = await hl(`/football/lineups/${m._hlId}`);
+      hlLineups[m.id] = j && (j.homeTeam ? j : j.data) || {};
+    }
     if (!hlLineups[m.id]){
       const lg = m.competition?.code || m._lg;
       let e = findHl(m, await hlDay(d, lg));
@@ -342,6 +384,91 @@ async function loadLineups(m, i){
   }catch(e){ box.innerHTML = `<span class="err">${e.message}</span>`; }
 }
 
+// ---- Dodatne lige prek Highlightly ----
+const LS = {
+  get(k){ try{ return JSON.parse(localStorage.getItem(k)); }catch(e){ return null; } },
+  set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+};
+const hlArr = (j) => Array.isArray(j) ? j : ((j && j.data) || []);
+const xCfg = (k) => XL.find(l => l[0] === k)[2];
+const BAD = /women|femen|u-?\d\d|youth|reserve|amateur|play-?off|cup/i;
+
+async function hlLeague(k){
+  const saved = LS.get("hlL_" + k);
+  if (saved && saved.id) return saved;
+  const c = xCfg(k);
+  let seen = [];
+  for (const q of c.q){
+    const list = hlArr(await hl(`/football/leagues?${q}&limit=100`));
+    seen = list.map(l => `${l.name} (${l.country?.name || "?"})`);
+    const hit = list.find(l => c.re.test(l.name || "") && !(c.no && c.no.test(l.name)) && !BAD.test(l.name || "")
+      && (!c.c || c.c.test(l.country?.name || "")));
+    if (hit){
+      const ss = (hit.seasons || []).map(s => +(s.season ?? s)).filter(Boolean);
+      const now = new Date(), y = now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
+      const out = { id: hit.id, name: hit.name, season: ss.length ? Math.max(...ss) : y };
+      LS.set("hlL_" + k, out);
+      return out;
+    }
+  }
+  throw new Error("liga ni najdena v Highlightly. Najdeno: " + (seen.slice(0, 8).join(", ") || "nič"));
+}
+
+function hlStatus(s){
+  const d = (s?.description || "").toLowerCase();
+  if (d.startsWith("finished")) return "FINISHED";
+  if (/cancel|postpon|abandon|suspend|award|delay/.test(d)) return "CANCELLED";
+  if (/progress|half|break|extra|penalt|live/.test(d)) return "IN_PLAY";
+  return "TIMED";
+}
+function hlMap(e, k){
+  const sc = String(e.state?.score?.current || "").split(/\s*-\s*/).map(x => x === "" ? null : +x);
+  const ok = sc.length === 2 && sc.every(x => Number.isFinite(x));
+  return {
+    id: "hl" + e.id, _hlId: e.id, _lg: k, utcDate: e.date, status: hlStatus(e.state),
+    matchday: (e.round || "").replace(/^Regular Season - /, "") || null,
+    homeTeam: { id: e.homeTeam?.id, name: e.homeTeam?.name || "?", shortName: e.homeTeam?.name || "?" },
+    awayTeam: { id: e.awayTeam?.id, name: e.awayTeam?.name || "?", shortName: e.awayTeam?.name || "?" },
+    score: { fullTime: { home: ok ? sc[0] : null, away: ok ? sc[1] : null }, halfTime: { home: null, away: null } }
+  };
+}
+async function hlPaged(path, max){
+  const all = [];
+  for (let off = 0, p = 0; p < max; p++, off += 100){
+    const j = await hl(`${path}&limit=100&offset=${off}`);
+    const d = hlArr(j); all.push(...d);
+    const tot = j && j.pagination && j.pagination.totalCount;
+    if (d.length < 100 || (tot && all.length >= tot)) break;
+  }
+  return all;
+}
+// cela sezona (za formo in statistiko), v telefonu shranjena 6 ur
+async function hlSeason(k, d1, d2, fresh){
+  const key = "hlS_" + k, c = LS.get(key);
+  if (!fresh && c && Date.now() - c.t < 6*3600e3) return c.m;
+  const L = await hlLeague(k);
+  // brez shrambe in kratko obdobje: najprej 1 klic na dan, ali liga sploh ima tekme
+  if (!fresh && d1 && d2){
+    const days = [];
+    for (let t = new Date(d1 + "T12:00:00"); iso(t) <= d2 && days.length < 3; t = new Date(t.getTime() + 864e5)) days.push(iso(t));
+    if (days.length <= 2){
+      let any = false;
+      for (const d of days){
+        const j = await hl(`/football/matches?leagueId=${L.id}&date=${d}&timezone=Europe/Ljubljana&limit=100`);
+        if (hlArr(j).length){ any = true; break; }
+      }
+      if (!any) return [];
+    }
+  }
+  const m = (await hlPaged(`/football/matches?leagueId=${L.id}&season=${L.season}`, 8)).map(e => hlMap(e, k));
+  LS.set(key, { t: Date.now(), m });
+  return m;
+}
+async function hlResults(k, d){
+  const L = await hlLeague(k);
+  return hlArr(await hl(`/football/matches?leagueId=${L.id}&date=${d}&timezone=Europe/Ljubljana&limit=100`)).map(e => hlMap(e, k));
+}
+
 function copy(t, btn){
   const done = () => { const o = btn.textContent; btn.textContent = "Kopirano ✓"; setTimeout(()=>btn.textContent=o, 1500); };
   if (navigator.clipboard) navigator.clipboard.writeText(t).then(done, () => fallback(t, done));
@@ -355,7 +482,8 @@ function fallback(t, done){
 // local-time window [d1 00:00, d2 24:00) Ljubljana
 function inRange(u, d1, d2){ const d = iso(new Date(u)); return d >= d1 && d <= d2; }
 
-async function getLeague(lg){
+async function getLeague(lg, d1, d2, fresh){
+  if (isX(lg)) return hlSeason(lg, d1, d2, fresh);
   if (!cache[lg]) cache[lg] = await api(`/competitions/${lg}/matches`);
   return cache[lg].matches || [];
 }
@@ -368,7 +496,7 @@ $("go").onclick = async () => {
   for (const [lg, lgName] of lgs){
     $("msg").textContent = `Nalagam ${lgName}...`;
     try{
-      const all = await getLeague(lg);
+      const all = await getLeague(lg, d1, d2);
       const finished = all.filter(m => m.status === "FINISHED").sort((a,b)=>a.utcDate.localeCompare(b.utcDate));
       const upcoming = all.filter(m => !["FINISHED","CANCELLED","AWARDED","IN_PLAY","PAUSED"].includes(m.status)
         && inRange(m.utcDate, d1, d2)).sort((a,b)=>a.utcDate.localeCompare(b.utcDate));
@@ -385,7 +513,7 @@ $("go").onclick = async () => {
   }
   if (!total) $("out").innerHTML = '<div class="msg">V tem obdobju ni tekem v izbranih ligah.</div>';
   $("msg").className = errs.length ? "msg err" : "msg";
-  $("msg").textContent = `${total} tekem · Klici: ${calls}` + (credits ? ` · Krediti za kvote: ${credits}` : "")
+  $("msg").textContent = `${total} tekem · Klici: ${calls} · Highlightly: ${hlCalls}` + (credits ? ` · Krediti za kvote: ${credits}` : "")
     + (used.length ? ` · Kvote naložene: ${used.join(", ")}` : "") + (errs.length ? " · " + errs.join(" · ") : "");
   if (total) $("cpAll").style.display = "block";
 };
@@ -400,7 +528,7 @@ $("res").onclick = async () => {
     $("msg").textContent = `Nalagam ${lgName}...`;
     try{
       delete cache[lg]; // vedno sveži rezultati
-      const ms = (await getLeague(lg)).filter(m => inRange(m.utcDate, d, d)).sort((a,b)=>a.utcDate.localeCompare(b.utcDate));
+      const ms = (isX(lg) ? await hlResults(lg, d) : await getLeague(lg)).filter(m => inRange(m.utcDate, d, d)).sort((a,b)=>a.utcDate.localeCompare(b.utcDate));
       if (!ms.length) continue;
       out.push(`${lgName}:`);
       for (const m of ms){
@@ -416,7 +544,7 @@ $("res").onclick = async () => {
   resText = out.length ? `Rezultati ${d}\n\n` + out.join("\n").trim() : "";
   $("out").innerHTML = resText ? `<pre>${resText.replace(/</g,"&lt;")}</pre>` : '<div class="msg">Ta dan ni tekem v izbranih ligah.</div>';
   $("msg").className = errs.length ? "msg err" : "msg";
-  $("msg").textContent = `Klici: ${calls}` + (errs.length ? " · " + errs.join(" · ") : "");
+  $("msg").textContent = `Klici: ${calls} · Highlightly: ${hlCalls}` + (errs.length ? " · " + errs.join(" · ") : "");
   if (resText) $("cpRes").style.display = "block";
 };
 $("cpRes").onclick = () => copy(resText, $("cpRes"));
